@@ -28,6 +28,8 @@ drm_tegra_bo_unref
 drm_tegra_bo_wrap
 drm_tegra_close
 drm_tegra_new
+drm_tegra_bo_get_name
+drm_tegra_bo_from_name
 EOF
 done)
 

@@ -101,6 +101,102 @@ drm_public void drm_tegra_close(struct drm_tegra *drm)
 	free(drm);
 }
 
+drm_public
+int drm_tegra_bo_get_name(struct drm_tegra_bo *bo, uint32_t *name)
+{
+	if (!bo || !name)
+		return -EINVAL;
+
+	if (!bo->name) {
+		struct drm_gem_flink args;
+		int err;
+
+		memset(&args, 0, sizeof(args));
+		args.handle = bo->handle;
+
+		err = drmIoctl(bo->drm->fd, DRM_IOCTL_GEM_FLINK, &args);
+		if (err < 0) {
+			VDBG_BO(bo, "err %d strerror(%s)\n",
+				err, strerror(-err));
+			return -errno;
+		}
+
+		drmHashInsert(bo->drm->name_table, args.name, bo);
+		bo->name = args.name;
+	}
+
+	*name = bo->name;
+
+	DBG_BO(bo, "\n");
+
+	return 0;
+}
+
+drm_public
+int drm_tegra_bo_from_name(struct drm_tegra_bo **bop, struct drm_tegra *drm,
+			   uint32_t name, uint32_t flags)
+{
+	struct drm_gem_open args;
+	struct drm_tegra_bo *dup;
+	struct drm_tegra_bo *bo;
+	int err = 0;
+
+	if (!drm || !name || !bop)
+		return -EINVAL;
+
+	/* check name table first, to see if BO is already open */
+	bo = lookup_bo(drm->name_table, name);
+	if (bo)
+		goto unlock;
+
+	bo = calloc(1, sizeof(*bo));
+	if (!bo) {
+		err = -ENOMEM;
+		goto unlock;
+	}
+
+	memset(&args, 0, sizeof(args));
+	args.name = name;
+
+	err = drmIoctl(drm->fd, DRM_IOCTL_GEM_OPEN, &args);
+	if (err < 0) {
+		VDBG_DRM(drm, "failed name 0x%08X err %d strerror(%s)\n",
+			 name, err, strerror(-err));
+		err = -errno;
+		free(bo);
+		bo = NULL;
+		goto unlock;
+	}
+
+	/* check handle table second, to see if BO is already open */
+	dup = lookup_bo(drm->handle_table, args.handle);
+	if (dup) {
+		VDBG_BO(dup, "success reused name 0x%08X\n", name);
+		free(bo);
+		bo = dup;
+		goto unlock;
+	}
+
+	drmHashInsert(drm->name_table, name, bo);
+	atomic_set(&bo->ref, 1);
+	bo->name = name;
+	bo->handle = args.handle;
+	bo->flags = flags;
+	bo->size = args.size;
+	bo->drm = drm;
+
+	DBG_BO(bo, "success\n");
+
+	VG_BO_ALLOC(bo);
+
+unlock:
+
+	*bop = bo;
+
+	return err;
+}
+
+
 drm_public int drm_tegra_bo_new(struct drm_tegra_bo **bop, struct drm_tegra *drm,
 		     uint32_t flags, uint32_t size)
 {
@@ -323,6 +419,62 @@ drm_public int drm_tegra_bo_set_tiling(struct drm_tegra_bo *bo,
 				  sizeof(args));
 	if (err < 0)
 		return -errno;
+
+	return 0;
+}
+
+drm_public
+int drm_tegra_bo_get_name(struct drm_tegra_bo *bo, uint32_t *name)
+{
+	if (!bo || !name)
+		return -EINVAL;
+
+	if (!bo->name) {
+		struct drm_gem_flink args;
+		int err;
+
+		memset(&args, 0, sizeof(args));
+		args.handle = bo->handle;
+
+		err = drmIoctl(bo->drm->fd, DRM_IOCTL_GEM_FLINK, &args);
+		if (err < 0)
+			return -errno;
+
+		bo->name = args.name;
+	}
+
+	*name = bo->name;
+
+	return 0;
+}
+
+drm_public
+int drm_tegra_bo_from_name(struct drm_tegra_bo **bop, struct drm_tegra *drm,
+			   uint32_t name, uint32_t flags)
+{
+	struct drm_gem_open args;
+	struct drm_tegra_bo *bo;
+	int err;
+
+	if (!drm || !name || !bop)
+		return -EINVAL;
+
+	bo = calloc(1, sizeof(*bo));
+	if (!bo)
+		return -ENOMEM;
+
+	memset(&args, 0, sizeof(args));
+	args.name = name;
+
+	err = drmIoctl(drm->fd, DRM_IOCTL_GEM_OPEN, &args);
+	if (err < 0) {
+		free(bo);
+		return -errno;
+	}
+
+	drm_tegra_bo_wrap(bop, drm, args.handle, flags, args.size);
+	if (err)
+		return err;
 
 	return 0;
 }
